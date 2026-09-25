@@ -281,14 +281,45 @@ footer{padding:44px 0 calc(44px + env(safe-area-inset-bottom,0px)); border-top:1
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.13.2/firebase-app-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.13.2/firebase-auth-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/firebase@10.13.2/firebase-firestore-compat.js"></script>
+<div id="recaptcha-container" style="display:none;"></div>
+
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyCYkzbZu9WZSW0Rv9lAzELyooQy9ATsINY",
+  authDomain: "garba-event-ff479.firebaseapp.com",
+  projectId: "garba-event-ff479",
+  storageBucket: "garba-event-ff479.firebasestorage.app",
+  messagingSenderId: "644891740230",
+  appId: "1:644891740230:web:da699650a5103485ae247",
+  measurementId: "G-20DEZQERED"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+let recaptchaVerifier = null;
+function getRecaptcha(){
+  if(recaptchaVerifier){ try{ recaptchaVerifier.clear(); }catch(e){} }
+  recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {size:'invisible'}, auth);
+  return recaptchaVerifier;
+}
+function toIndianPhone(raw){
+  const digits = raw.replace(/\D/g,'');
+  return digits.length === 10 ? '+91'+digits : null;
+}
+</script>
+
 <script>
 const steps = [
   {title:"Basic Information", sub:"Step 1 of 7", body:`
-    <div class="field"><label>Display name</label><input placeholder="Your first name"></div>
-    <div class="field"><label>Email or mobile number</label><input placeholder="you@example.com or 10-digit number">
+    <div class="field"><label>Display name</label><input id="regName" placeholder="Your first name"></div>
+    <div class="field"><label>Mobile number</label><input id="regContact" type="tel" placeholder="10-digit mobile number">
       <p style="font-size:12px; color:#9b8d9b; margin:6px 0 0;">This is how you'll log back in later.</p>
     </div>
-    <div class="field"><label>Date of birth</label><input type="date"></div>
+    <div class="field"><label>Date of birth</label><input id="regDob" type="date"></div>
     <div class="field"><label>Gender</label><select id="genderSelect" onchange="selectedGender=this.value"><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></div>
     <div class="field"><label>Profile picture</label><input type="file"></div>`},
   {title:"Verify Your Contact", sub:"Step 2 of 7", body:`
@@ -324,6 +355,9 @@ const steps = [
 ];
 let selectedGender = 'female';
 let cur = 0;
+let regData = {};
+let regConfirmation = null;
+
 function render(){
   const s = steps[cur];
   let bodyHtml = s.body;
@@ -331,13 +365,17 @@ function render(){
     const amt = selectedGender === 'male' ? 49 : 29;
     bodyHtml = bodyHtml.replace('₹0', '₹'+amt);
   }
+  let actionFn = 'next()', actionLabel = 'Continue';
+  if(cur === 0){ actionFn = 'regSendOtp()'; actionLabel = 'Send OTP'; }
+  else if(cur === 1){ actionFn = 'regVerifyOtp()'; actionLabel = 'Verify'; }
+  else if(cur === steps.length-1){ actionFn = 'regFinish()'; actionLabel = 'Confirm Registration'; }
   document.getElementById('modalBody').innerHTML = `
     <div class="step-of">${s.sub}</div>
     <h3>${s.title}</h3>
     ${bodyHtml}
     <div class="modal-actions">
       ${cur>0 ? '<button class="btn-ghost" onclick="prev()">Back</button>' : '<span></span>'}
-      <button class="btn-primary" onclick="next()">${cur===steps.length-1 ? 'Pay & Finish' : 'Continue'}</button>
+      <button class="btn-primary" onclick="${actionFn}">${actionLabel}</button>
     </div>`;
 }
 function pick(el, gridId){
@@ -349,8 +387,43 @@ function prev(){ if(cur>0){cur--; render();} }
 function openModal(){ cur=0; render(); document.getElementById('overlay').classList.add('open'); }
 function closeModal(){ document.getElementById('overlay').classList.remove('open'); }
 
+function regSendOtp(){
+  regData.name = document.getElementById('regName').value.trim();
+  regData.dob = document.getElementById('regDob').value;
+  regData.gender = selectedGender;
+  const phone = toIndianPhone(document.getElementById('regContact').value);
+  if(!phone){ alert('Enter a valid 10-digit mobile number.'); return; }
+  regData.phone = phone;
+  const appVerifier = getRecaptcha();
+  auth.signInWithPhoneNumber(phone, appVerifier).then(confirmation => {
+    regConfirmation = confirmation;
+    cur = 1; render();
+  }).catch(err => { alert('Could not send OTP: ' + err.message); });
+}
+function regVerifyOtp(){
+  const code = document.getElementById('regOtpInput').value.trim();
+  if(!regConfirmation){ alert('Please request an OTP first.'); return; }
+  regConfirmation.confirm(code).then(() => { cur = 2; render(); })
+    .catch(() => { alert('Invalid OTP, please try again.'); });
+}
+function regFinish(){
+  const amt = selectedGender === 'male' ? 49 : 29;
+  db.collection('users').doc(regData.phone).set({
+    name: regData.name,
+    dob: regData.dob,
+    gender: regData.gender,
+    phone: regData.phone,
+    registrationFee: amt,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  }).then(() => {
+    closeModal();
+    alert('Profile saved! (Real payment step comes next.)');
+  }).catch(err => { alert('Could not save profile: ' + err.message); });
+}
+
 /* LOGIN FLOW */
-let loginStep = 0, loginMethod = 'email';
+let loginStep = 0, loginMethod = 'mobile';
+let loginConfirmation = null;
 function setLoginMethod(el, method){
   document.querySelectorAll('#methodGrid .opt').forEach(o=>o.classList.remove('sel'));
   el.classList.add('sel');
@@ -371,15 +444,16 @@ function renderLogin(){
         <label>${loginMethod==='email' ? 'Email address' : 'Mobile number'}</label>
         <input id="loginInput" type="${loginMethod==='email'?'email':'tel'}" placeholder="${loginMethod==='email' ? 'you@example.com' : '10-digit mobile number'}">
       </div>
-      <div class="modal-actions"><span></span><button class="btn-primary" onclick="loginStep=1; renderLogin();">Send OTP</button></div>`;
+      ${loginMethod==='email' ? '<p style="font-size:12px; color:#9b8d9b;">Email login is coming soon — please use Mobile Number for now.</p>' : ''}
+      <div class="modal-actions"><span></span><button class="btn-primary" onclick="loginSendOtp()">Send OTP</button></div>`;
   } else if(loginStep === 1){
     body.innerHTML = `
       <h3>Enter OTP</h3>
-      <p style="font-size:13.5px; margin-bottom:20px;">We've sent a 6-digit code to your ${loginMethod==='email'?'email':'mobile number'}.</p>
+      <p style="font-size:13.5px; margin-bottom:20px;">We've sent a 6-digit code to your mobile number.</p>
       <div class="field"><label>OTP code</label><input id="otpInput" maxlength="6" placeholder="6-digit code"></div>
       <div class="modal-actions">
         <button class="btn-ghost" onclick="loginStep=0; renderLogin();">Back</button>
-        <button class="btn-primary" onclick="loginStep=2; renderLogin();">Verify</button>
+        <button class="btn-primary" onclick="loginVerifyOtp()">Verify</button>
       </div>`;
   } else {
     body.innerHTML = `
@@ -387,6 +461,22 @@ function renderLogin(){
       <p style="font-size:13.5px;">Logged in successfully. You can now complete your profile.</p>
       <div class="modal-actions"><span></span><button class="btn-primary" onclick="closeLogin();">Continue</button></div>`;
   }
+}
+function loginSendOtp(){
+  if(loginMethod !== 'mobile'){ alert('Email login is coming soon — please use Mobile Number for now.'); return; }
+  const phone = toIndianPhone(document.getElementById('loginInput').value);
+  if(!phone){ alert('Enter a valid 10-digit mobile number.'); return; }
+  const appVerifier = getRecaptcha();
+  auth.signInWithPhoneNumber(phone, appVerifier).then(confirmation => {
+    loginConfirmation = confirmation;
+    loginStep = 1; renderLogin();
+  }).catch(err => { alert('Could not send OTP: ' + err.message); });
+}
+function loginVerifyOtp(){
+  const code = document.getElementById('otpInput').value.trim();
+  if(!loginConfirmation){ alert('Please request an OTP first.'); return; }
+  loginConfirmation.confirm(code).then(() => { loginStep = 2; renderLogin(); })
+    .catch(() => { alert('Invalid OTP, please try again.'); });
 }
 function openLogin(){ loginStep = 0; renderLogin(); document.getElementById('loginOverlay').classList.add('open'); }
 function closeLogin(){ document.getElementById('loginOverlay').classList.remove('open'); }
