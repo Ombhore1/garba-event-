@@ -1,4 +1,4 @@
-<!-- BUILD VERSION: v3-new-key --><!DOCTYPE html>
+<!-- BUILD VERSION: v4-supabase --><!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -281,42 +281,19 @@ footer{padding:44px 0 calc(44px + env(safe-area-inset-bottom,0px)); border-top:1
   </div>
 </div>
 
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-<div id="recaptcha-container" style="position:fixed; bottom:0; left:0; opacity:0.01; pointer-events:none;"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
 <script>
-const firebaseConfig = {
-  apiKey: "AIzaSyDcnQD_xz9l-AOSTRTonbxuFAlEeVb1nMY",
-  authDomain: "garba-event-ff479.firebaseapp.com",
-  projectId: "garba-event-ff479",
-  storageBucket: "garba-event-ff479.firebasestorage.app",
-  messagingSenderId: "644891740230",
-  appId: "1:644891740230:web:da699650a5103485ae247",
-  measurementId: "G-20DEZQERED"
-};
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.firestore();
-
-let recaptchaVerifier = null;
-function getRecaptcha(){
-  if(recaptchaVerifier){ try{ recaptchaVerifier.clear(); }catch(e){} }
-  recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {size:'invisible'}, auth);
-  return recaptchaVerifier;
-}
-function toIndianPhone(raw){
-  const digits = raw.replace(/\D/g,'');
-  return digits.length === 10 ? '+91'+digits : null;
-}
+const SUPABASE_URL = "https://tcuhtmzcjyjtfywpeype.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_ZVdPOeX5UDe0DDIAMsNREQ_VxpLq-0D";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 </script>
 
 <script>
 const steps = [
   {title:"Basic Information", sub:"Step 1 of 7", body:`
     <div class="field"><label>Display name</label><input id="regName" placeholder="Your first name"></div>
-    <div class="field"><label>Mobile number</label><input id="regContact" type="tel" placeholder="10-digit mobile number">
+    <div class="field"><label>Email address</label><input id="regContact" type="email" placeholder="you@example.com">
       <p style="font-size:12px; color:#9b8d9b; margin:6px 0 0;">This is how you'll log back in later.</p>
     </div>
     <div class="field"><label>Date of birth</label><input id="regDob" type="date"></div>
@@ -356,7 +333,6 @@ const steps = [
 let selectedGender = 'female';
 let cur = 0;
 let regData = {};
-let regConfirmation = null;
 
 function render(){
   const s = steps[cur];
@@ -387,69 +363,55 @@ function prev(){ if(cur>0){cur--; render();} }
 function openModal(){ cur=0; render(); document.getElementById('overlay').classList.add('open'); }
 function closeModal(){ document.getElementById('overlay').classList.remove('open'); }
 
-function regSendOtp(){
+async function regSendOtp(){
   regData.name = document.getElementById('regName').value.trim();
   regData.dob = document.getElementById('regDob').value;
   regData.gender = selectedGender;
-  const phone = toIndianPhone(document.getElementById('regContact').value);
-  if(!phone){ alert('Enter a valid 10-digit mobile number.'); return; }
-  regData.phone = phone;
-  const appVerifier = getRecaptcha();
-  auth.signInWithPhoneNumber(phone, appVerifier).then(confirmation => {
-    regConfirmation = confirmation;
-    cur = 1; render();
-  }).catch(err => { alert('Could not send OTP: ' + err.message); });
+  const email = document.getElementById('regContact').value.trim();
+  if(!email || !email.includes('@')){ alert('Enter a valid email address.'); return; }
+  regData.email = email;
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+  if(error){ alert('Could not send OTP: ' + error.message); return; }
+  cur = 1; render();
 }
-function regVerifyOtp(){
+async function regVerifyOtp(){
   const code = document.getElementById('regOtpInput').value.trim();
-  if(!regConfirmation){ alert('Please request an OTP first.'); return; }
-  regConfirmation.confirm(code).then(() => { cur = 2; render(); })
-    .catch(() => { alert('Invalid OTP, please try again.'); });
+  const { error } = await sb.auth.verifyOtp({ email: regData.email, token: code, type: 'email' });
+  if(error){ alert('Invalid OTP, please try again.'); return; }
+  cur = 2; render();
 }
-function regFinish(){
+async function regFinish(){
   const amt = selectedGender === 'male' ? 49 : 29;
-  db.collection('users').doc(regData.phone).set({
+  const { error } = await sb.from('users').insert({
     name: regData.name,
     dob: regData.dob,
     gender: regData.gender,
-    phone: regData.phone,
-    registrationFee: amt,
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  }).then(() => {
-    closeModal();
-    alert('Profile saved! (Real payment step comes next.)');
-  }).catch(err => { alert('Could not save profile: ' + err.message); });
+    email: regData.email,
+    registration_fee: amt
+  });
+  if(error){ alert('Could not save profile: ' + error.message); return; }
+  closeModal();
+  alert('Profile saved! (Real payment step comes next.)');
 }
 
 /* LOGIN FLOW */
-let loginStep = 0, loginMethod = 'mobile';
-let loginConfirmation = null;
-function setLoginMethod(el, method){
-  document.querySelectorAll('#methodGrid .opt').forEach(o=>o.classList.remove('sel'));
-  el.classList.add('sel');
-  loginMethod = method;
-  renderLogin();
-}
+let loginStep = 0;
+let loginEmail = '';
 function renderLogin(){
   const body = document.getElementById('loginBody');
   if(loginStep === 0){
     body.innerHTML = `
       <h3>Log in</h3>
-      <p style="font-size:13.5px; margin-bottom:20px;">Choose how you'd like to continue.</p>
-      <div class="opt-grid" id="methodGrid" style="margin-bottom:18px;">
-        <div class="opt ${loginMethod==='email'?'sel':''}" onclick="setLoginMethod(this,'email')">Email</div>
-        <div class="opt ${loginMethod==='mobile'?'sel':''}" onclick="setLoginMethod(this,'mobile')">Mobile Number</div>
-      </div>
+      <p style="font-size:13.5px; margin-bottom:20px;">Enter the email you registered with.</p>
       <div class="field">
-        <label>${loginMethod==='email' ? 'Email address' : 'Mobile number'}</label>
-        <input id="loginInput" type="${loginMethod==='email'?'email':'tel'}" placeholder="${loginMethod==='email' ? 'you@example.com' : '10-digit mobile number'}">
+        <label>Email address</label>
+        <input id="loginInput" type="email" placeholder="you@example.com">
       </div>
-      ${loginMethod==='email' ? '<p style="font-size:12px; color:#9b8d9b;">Email login is coming soon — please use Mobile Number for now.</p>' : ''}
       <div class="modal-actions"><span></span><button class="btn-primary" onclick="loginSendOtp()">Send OTP</button></div>`;
   } else if(loginStep === 1){
     body.innerHTML = `
       <h3>Enter OTP</h3>
-      <p style="font-size:13.5px; margin-bottom:20px;">We've sent a 6-digit code to your mobile number.</p>
+      <p style="font-size:13.5px; margin-bottom:20px;">We've sent a 6-digit code to your email.</p>
       <div class="field"><label>OTP code</label><input id="otpInput" maxlength="6" placeholder="6-digit code"></div>
       <div class="modal-actions">
         <button class="btn-ghost" onclick="loginStep=0; renderLogin();">Back</button>
@@ -462,21 +424,19 @@ function renderLogin(){
       <div class="modal-actions"><span></span><button class="btn-primary" onclick="closeLogin();">Continue</button></div>`;
   }
 }
-function loginSendOtp(){
-  if(loginMethod !== 'mobile'){ alert('Email login is coming soon — please use Mobile Number for now.'); return; }
-  const phone = toIndianPhone(document.getElementById('loginInput').value);
-  if(!phone){ alert('Enter a valid 10-digit mobile number.'); return; }
-  const appVerifier = getRecaptcha();
-  auth.signInWithPhoneNumber(phone, appVerifier).then(confirmation => {
-    loginConfirmation = confirmation;
-    loginStep = 1; renderLogin();
-  }).catch(err => { alert('Could not send OTP: ' + err.message); });
+async function loginSendOtp(){
+  const email = document.getElementById('loginInput').value.trim();
+  if(!email || !email.includes('@')){ alert('Enter a valid email address.'); return; }
+  loginEmail = email;
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false } });
+  if(error){ alert('Could not send OTP: ' + error.message); return; }
+  loginStep = 1; renderLogin();
 }
-function loginVerifyOtp(){
+async function loginVerifyOtp(){
   const code = document.getElementById('otpInput').value.trim();
-  if(!loginConfirmation){ alert('Please request an OTP first.'); return; }
-  loginConfirmation.confirm(code).then(() => { loginStep = 2; renderLogin(); })
-    .catch(() => { alert('Invalid OTP, please try again.'); });
+  const { error } = await sb.auth.verifyOtp({ email: loginEmail, token: code, type: 'email' });
+  if(error){ alert('Invalid OTP, please try again.'); return; }
+  loginStep = 2; renderLogin();
 }
 function openLogin(){ loginStep = 0; renderLogin(); document.getElementById('loginOverlay').classList.add('open'); }
 function closeLogin(){ document.getElementById('loginOverlay').classList.remove('open'); }
