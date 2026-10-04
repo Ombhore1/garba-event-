@@ -1,4 +1,4 @@
-<!-- BUILD VERSION: v4-supabase --><!DOCTYPE html>
+<!-- BUILD VERSION: v6-signup-otp-type --><!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -363,20 +363,26 @@ function prev(){ if(cur>0){cur--; render();} }
 function openModal(){ cur=0; render(); document.getElementById('overlay').classList.add('open'); }
 function closeModal(){ document.getElementById('overlay').classList.remove('open'); }
 
+let sendingOtp = false;
 async function regSendOtp(){
+  if(sendingOtp) return;
   regData.name = document.getElementById('regName').value.trim();
   regData.dob = document.getElementById('regDob').value;
   regData.gender = selectedGender;
   const email = document.getElementById('regContact').value.trim();
   if(!email || !email.includes('@')){ alert('Enter a valid email address.'); return; }
   regData.email = email;
+  sendingOtp = true;
+  const btn = document.querySelector('.modal-actions .btn-primary');
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending...'; }
   const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+  sendingOtp = false;
   if(error){ alert('Could not send OTP: ' + error.message); return; }
   cur = 1; render();
 }
 async function regVerifyOtp(){
   const code = document.getElementById('regOtpInput').value.trim();
-  const { error } = await sb.auth.verifyOtp({ email: regData.email, token: code, type: 'email' });
+  const { error } = await sb.auth.verifyOtp({ email: regData.email, token: code, type: 'signup' });
   if(error){ alert('Invalid OTP, please try again.'); return; }
   cur = 2; render();
 }
@@ -425,10 +431,13 @@ function renderLogin(){
   }
 }
 async function loginSendOtp(){
+  if(sendingOtp) return;
   const email = document.getElementById('loginInput').value.trim();
   if(!email || !email.includes('@')){ alert('Enter a valid email address.'); return; }
   loginEmail = email;
+  sendingOtp = true;
   const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false } });
+  sendingOtp = false;
   if(error){ alert('Could not send OTP: ' + error.message); return; }
   loginStep = 1; renderLogin();
 }
